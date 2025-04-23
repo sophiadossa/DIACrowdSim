@@ -17,7 +17,7 @@ OBSTACLE_COLOR = (120, 120, 120)
 # Red targets in top-left and bottom-left corners
 targets = [
     (1, 0.3, 1, 1),
-    (1, 13.5, 1, 1)
+    (1, 14, 1, 1)
 ]
 
 # Green source blocks in 4 segments (with padding)
@@ -50,47 +50,49 @@ def draw_rects(rects, color):
 
 def draw_bottleneck(x, y, flipped=False):
     wall_width = 0.2
-    wall_length = 1.5
+    corridor_length = 1.5
+    polygon_offset = 1.0  # Make polygons stretch wider/larger
 
-    # Vertical walls become horizontal corridors
+    # --- DRAW CORRIDORS ---
     if flipped:
-        # Horizontal walls for bottom-left bottleneck (flipped)
-        corridor = [
-            (x - wall_length, y, wall_length , wall_width),
-            (x - wall_length, y + 1 - wall_width, wall_length, wall_width)
+        # Bottom-left target → corridors go up, shifted left of target
+        corridors = [
+            (x - 1, y - corridor_length, wall_width, corridor_length),
+            (x - 1 + 1 - wall_width, y - corridor_length, wall_width, corridor_length)
         ]
     else:
-        # Horizontal walls for top-left bottleneck
-        corridor = [
-            (x + 1, y, wall_length, wall_width),
-            (x + 1, y + 1 - wall_width, wall_length, wall_width)
+        # Top-left target → corridors go downward
+        corridors = [
+            (x, y + 1, wall_width, corridor_length),
+            (x + 1 - wall_width, y + 1, wall_width, corridor_length)
         ]
-    draw_rects(corridor, OBSTACLE_COLOR)
 
-    # Diagonal funnel using polygons (rotated 90° CW or flipped)
+    draw_rects(corridors, OBSTACLE_COLOR)
+
+    # --- DRAW POLYGONAL SIDE BLOCKERS ---
     if flipped:
-        # Bottom-left bottleneck slants (open to left)
+        # Bottom-left (same as before)
         pygame.draw.polygon(window, OBSTACLE_COLOR, [
-            ((x - 0.5) * GRID_SIZE, (y - 1) * GRID_SIZE),
-            ((x - 0.5) * GRID_SIZE, y * GRID_SIZE),
-            (x * GRID_SIZE, y * GRID_SIZE)
+            ((x - 1) * GRID_SIZE, y * GRID_SIZE),
+            ((x - 1 - polygon_offset) * GRID_SIZE, (y + 1) * GRID_SIZE),
+            ((x - 1) * GRID_SIZE, (y + 1) * GRID_SIZE)
         ])
         pygame.draw.polygon(window, OBSTACLE_COLOR, [
-            ((x - 0.5) * GRID_SIZE, (y + 2) * GRID_SIZE),
-            ((x - 0.5) * GRID_SIZE, (y + 1) * GRID_SIZE),
-            (x * GRID_SIZE, (y + 1) * GRID_SIZE)
+            ((x) * GRID_SIZE, y * GRID_SIZE),
+            ((x + polygon_offset) * GRID_SIZE, (y + 1) * GRID_SIZE),
+            ((x) * GRID_SIZE, (y + 1) * GRID_SIZE)
         ])
     else:
-        # Top-left bottleneck slants (open to right)
+        # Top-left (now FLIPPED to match bottom bottleneck style)
         pygame.draw.polygon(window, OBSTACLE_COLOR, [
-            ((x + 1.5) * GRID_SIZE, (y - 1) * GRID_SIZE),
-            ((x + 1.5) * GRID_SIZE, y * GRID_SIZE),
-            ((x + 1) * GRID_SIZE, y * GRID_SIZE)
+            (x * GRID_SIZE, (y + 1) * GRID_SIZE),  # bottom left
+            ((x - polygon_offset) * GRID_SIZE, y * GRID_SIZE),  # upper-left point
+            (x * GRID_SIZE, y * GRID_SIZE)  # top left
         ])
         pygame.draw.polygon(window, OBSTACLE_COLOR, [
-            ((x + 1.5) * GRID_SIZE, (y + 2) * GRID_SIZE),
-            ((x + 1.5) * GRID_SIZE, (y + 1) * GRID_SIZE),
-            ((x + 1) * GRID_SIZE, (y + 1) * GRID_SIZE)
+            ((x + 1) * GRID_SIZE, (y + 1) * GRID_SIZE),  # bottom right
+            ((x + 1 + polygon_offset) * GRID_SIZE, y * GRID_SIZE),  # upper-right point
+            ((x + 1) * GRID_SIZE, y * GRID_SIZE)  # top right
         ])
 
 
@@ -138,7 +140,7 @@ def run_environment(custom_draw_fn=None):
         
         draw_rects(obstacles, OBSTACLE_COLOR)
         draw_bottleneck(1, 0.3, flipped=False)
-        draw_bottleneck(2, 13.5, flipped=True)
+        draw_bottleneck(2, 14, flipped=True)
 
         draw_rects(targets, TARGET_COLOR)
         draw_rects(sources, SOURCE_COLOR)
