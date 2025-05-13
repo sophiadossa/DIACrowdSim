@@ -1,155 +1,150 @@
 import pygame
 import sys
+from PIL import Image
+import numpy as np
+from cromosim.domain import Domain, Destination
 
-# Init
+# 1) Pygame + constants
 pygame.init()
-
-# Constants
 WINDOW_WIDTH, WINDOW_HEIGHT = 800, 600
-GRID_SIZE = 40
-BG_COLOR = (255, 255, 255)
-SOURCE_COLOR = (0, 200, 0)
-TARGET_COLOR = (200, 0, 0)
-OBSTACLE_COLOR = (120, 120, 120)
+GRID_SIZE      = 40
+BG_COLOR       = (255, 255, 255)
+SOURCE_COLOR   = (34, 177,  76)
+EXIT_COLOR     = (237,  28,  36)
+WALL_COLOR     = (0,    0,    0)
 
-# Environment layout (x, y, width, height) in grid units
+# how many cells across/down
+cols = WINDOW_WIDTH  // GRID_SIZE  # e.g. 20
+rows = WINDOW_HEIGHT // GRID_SIZE  # e.g. 15
 
-# Red targets in top-left and bottom-left corners
-targets = [
-    (1, 0.3, 1, 1),
-    (1, 14, 1, 1)
-]
+# 2) Load the full-detail PNG and also make a tiny 20×15 version
+img_full = Image.open("floorplan.png").convert("RGB")
+img_small = img_full.resize((cols, rows), Image.NEAREST)
+raw = np.array(img_small)
+r, g, b = raw[:,:,0], raw[:,:,1], raw[:,:,2]
 
-# Green source blocks in 4 segments (with padding)
-sources = [
-    (9.6, 5.8, 5, 1),  # left segment slim source (horizontal)
-    (15.7, 5.8, 4, 1),   # right segment slim source (horizontal)
-    (9.6, 7.7, 5, 1),  # left segment slim source (horizontal)
-    (15.7, 7.7, 4, 1),   # right segment slim source (horizontal)
-    (6.8, 5.8, 2, 1),  # left segment slim source (horizontal)
-    (6.8, 7.7, 2, 1)   # right segment slim source (horizontal)
-]
+DARK_THRESH = 50
 
+# 3) Derive grid‐level lists from the tiny image:
+#    A) occupancy grid
+grid = [[0]*rows for _ in range(cols)]
+LUM_THRESH = 500
+wall_mask = (r + g+ b) < LUM_THRESH
+for y, x in zip(*np.where(wall_mask)):
+    grid[x][y] = 1
 
-# Obstacles: centered horizontal and two verticals
+#    B) exit cells
+exit_mask = (r==EXIT_COLOR[0]) & (g==EXIT_COLOR[1]) & (b==EXIT_COLOR[2])
+targets = [(int(x), int(y), 1, 1) for y,x in zip(*np.where(exit_mask))]
+if not targets:
+    # fallback if your red wasn’t exact
+    targets = [(1, 0, 1, 1), (1, rows-1, 1, 1)]
+
+#    C) (optional) derive source cells from green
+source_mask = (r==SOURCE_COLOR[0]) & (g==SOURCE_COLOR[1]) & (b==SOURCE_COLOR[2])
+sources = [(int(x), int(y), 1, 1) for y,x in zip(*np.where(source_mask))]
+if not sources:
+    # fallback to your old hard-coded bars
+    sources = [
+        (3.6, 5.8, 5,   1),
+        (9.6, 5.8, 9.8, 1),
+        (9.6, 7.7, 9.8, 1),
+        (3.6, 7.7, 5,   1),
+    ]
+
+#    D) manual obstacles (if you still need rectangular walls)
 obstacles = [
-    (2, 7, 18, 0.5),  # horizontal center
-
-    (15, 2, 0.4, 11),  # vertical right
-    (9, 3, 0.4, 9)  # vertical lwft
+    (2, 7, 18, 0.5),
+    (2, 7, 8, 0.5),
+    (14, 7, 6, 0.5),
+    (19.6, 0, 0.4, 17),
+    (9, 3, 0.4, 9)
 ]
 
+# 4) Build Cromosim Domain off the tiny image
+dom = Domain(
+    name="env",
+    pixel_size=GRID_SIZE,
+    width=cols,
+    height=rows,
+    wall_colors=[list(WALL_COLOR)],
+    background="floorplan.png"
+)
+dom.build_domain()
+# register exits so Cromosim’s distance-map works too
+dest = Destination(
+    name="exit",
+    colors=[list(EXIT_COLOR)],
+    excluded_colors=[list(WALL_COLOR)],
+    desired_velocity_from_color=[],
+    velocity_scale=1.0
+)
+dom.add_destination(dest)
 
+# 5) Pre-load & up-scale the full-detail image into Pygame
 window = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
 pygame.display.set_caption("Crowd Simulation Environment")
 clock = pygame.time.Clock()
 
+_pg_floorplan = pygame.image.load("floorplan.png").convert()
+_pg_floorplan = pygame.transform.scale(
+    _pg_floorplan,
+    (WINDOW_WIDTH, WINDOW_HEIGHT)
+)
+
 def draw_rects(rects, color):
+    """Draws list of grid (x,y,w,h) rects into Pygame coords."""
     for x, y, w, h in rects:
-        pygame.draw.rect(window, color, (x * GRID_SIZE, y * GRID_SIZE, w * GRID_SIZE, h * GRID_SIZE))
+        pygame.draw.rect(
+            window,
+            color,
+            (x*GRID_SIZE, y*GRID_SIZE, w*GRID_SIZE, h*GRID_SIZE)
+        )
 
-def draw_bottleneck(x, y, flipped=False):
-    wall_width = 0.2
-    corridor_length = 1.5
-    polygon_offset = 1.0  # Make polygons stretch wider/larger
-
-    # --- DRAW CORRIDORS ---
-    if flipped:
-        # Bottom-left target → corridors go up, shifted left of target
-        corridors = [
-            (x - 1, y - corridor_length, wall_width, corridor_length),
-            (x - 1 + 1 - wall_width, y - corridor_length, wall_width, corridor_length)
-        ]
-    else:
-        # Top-left target → corridors go downward
-        corridors = [
-            (x, y + 1, wall_width, corridor_length),
-            (x + 1 - wall_width, y + 1, wall_width, corridor_length)
-        ]
-
-    draw_rects(corridors, OBSTACLE_COLOR)
-
-    # --- DRAW POLYGONAL SIDE BLOCKERS ---
-    if flipped:
-        # Bottom-left (same as before)
-        pygame.draw.polygon(window, OBSTACLE_COLOR, [
-            ((x - 1) * GRID_SIZE, y * GRID_SIZE),
-            ((x - 1 - polygon_offset) * GRID_SIZE, (y + 1) * GRID_SIZE),
-            ((x - 1) * GRID_SIZE, (y + 1) * GRID_SIZE)
-        ])
-        pygame.draw.polygon(window, OBSTACLE_COLOR, [
-            ((x) * GRID_SIZE, y * GRID_SIZE),
-            ((x + polygon_offset) * GRID_SIZE, (y + 1) * GRID_SIZE),
-            ((x) * GRID_SIZE, (y + 1) * GRID_SIZE)
-        ])
-    else:
-        # Top-left (now FLIPPED to match bottom bottleneck style)
-        pygame.draw.polygon(window, OBSTACLE_COLOR, [
-            (x * GRID_SIZE, (y + 1) * GRID_SIZE),  # bottom left
-            ((x - polygon_offset) * GRID_SIZE, y * GRID_SIZE),  # upper-left point
-            (x * GRID_SIZE, y * GRID_SIZE)  # top left
-        ])
-        pygame.draw.polygon(window, OBSTACLE_COLOR, [
-            ((x + 1) * GRID_SIZE, (y + 1) * GRID_SIZE),  # bottom right
-            ((x + 1 + polygon_offset) * GRID_SIZE, y * GRID_SIZE),  # upper-right point
-            ((x + 1) * GRID_SIZE, y * GRID_SIZE)  # top right
-        ])
-
-
-def main():
-    # 
-    while True:
-        window.fill(BG_COLOR)
-        
-        draw_rects(obstacles, OBSTACLE_COLOR)
-        draw_bottleneck(1, 0.3, flipped = False)
-        draw_bottleneck(2, 13.5, flipped =True)
-
-        draw_rects(targets, TARGET_COLOR)
-        draw_rects(sources, SOURCE_COLOR)
-
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
-
-        pygame.display.flip()
-        clock.tick(60)
-
-# creates 2D array (gri[x][y]) where 0 is walkable and 1 is obstacle
 def get_grid():
-    cols = WINDOW_WIDTH // GRID_SIZE
-    rows = WINDOW_HEIGHT // GRID_SIZE
+    """Return occupancy grid as 2D list: 1=wall, 0=free."""
     grid = [[0 for _ in range(rows)] for _ in range(cols)]
-
-    # Mark obstacles as 1
-    for ox, oy, ow, oh in obstacles:
-        for x in range(int(ox * 10), int((ox + ow) * 10)):
-            for y in range(int(oy * 10), int((oy + oh) * 10)):
-                gx = int(x / 10)
-                gy = int(y / 10)
-                if 0 <= gx < cols and 0 <= gy < rows:
-                    grid[gx][gy] = 1
-
+    for x in range(cols):
+        for y in range(rows):
+            if (r[y, x] < DARK_THRESH
+            and  g[y, x] < DARK_THRESH
+            and  b[y, x] < DARK_THRESH):
+                grid[x][y] = 1
     return grid
 
+def get_grid_obstacles():
+    """Return manual obstacle rectangles for your collision code."""
+    return obstacles
+
+def debug_draw_grid(surface):
+    """Outline each occupied cell for debugging."""
+    grid = get_grid()
+    for x in range(cols):
+        for y in range(rows):
+            if grid[x][y] == 1:
+                pygame.draw.rect(
+                    surface,
+                    (200,200,200),
+                    (x*GRID_SIZE, y*GRID_SIZE,
+                     GRID_SIZE,    GRID_SIZE),
+                    1
+                )
+
 def run_environment(custom_draw_fn=None):
+    """
+    1) blit the full-detail background
+    2) overlay manual walls, exits, sources
+    3) call your agents’ draw/update
+    """
     while True:
         window.fill(BG_COLOR)
-        
-        draw_rects(obstacles, OBSTACLE_COLOR)
-        draw_bottleneck(1, 0.3, flipped=False)
-        draw_bottleneck(2, 14, flipped=True)
-
-        draw_rects(targets, TARGET_COLOR)
-        draw_rects(sources, SOURCE_COLOR)
+        window.blit(_pg_floorplan, (0,0))
 
         if custom_draw_fn:
             custom_draw_fn(window)
 
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
+        for ev in pygame.event.get():
+            if ev.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
 

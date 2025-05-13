@@ -1,0 +1,10 @@
+{
+  "version": "0.2.1",
+  "tasks": [
+    {
+      "taskLabel": "task-pedestrian_agent",
+      "appliesTo": "pedestrian_agent.py",
+      "type": "launch"
+    }
+  ]
+}
