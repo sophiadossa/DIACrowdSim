@@ -3,15 +3,28 @@ import math
 import collections
 import random
 from pathfinding import astar, get_neighbours
-from crowd_environment import get_grid, get_grid_obstacles, GRID_SIZE, WINDOW_HEIGHT, WINDOW_WIDTH
+from crowd_environment import get_grid, get_grid_obstacles, GRID_SIZE, WINDOW_HEIGHT, WINDOW_WIDTH, dom, FLOORPLAN_SURFACE
+from cromosim.micro import (
+    compute_contacts,
+    compute_forces,
+    move_people,
+    people_update_destination,
+)
 
 class Pedestrian:
     def __init__(self, spawn, target, colour=(0,0,255), speed=2):
-        self.pos    = [spawn[0], spawn[1]]
+        # self.pos    = [spawn[0], spawn[1]]
         self.target = target
         self.colour = colour
         self.speed  = speed
-        self.radius = 5
+        # self.radius = 5
+
+        self.pos = [spawn[0], spawn[1]]
+        self.vel = [0.0, 0.0]
+        self.radius = 8.0
+        self.mass = 80.0
+        self.desired_velocity = 1.2
+        self.domain = dom
 
     def draw(self, surface):
         pygame.draw.circle(surface, self.colour,
@@ -26,6 +39,30 @@ class Pedestrian:
         self.pos[0] = max(self.radius, min(self.pos[0], WINDOW_WIDTH - self.radius))
         self.pos[1] = max(self.radius, min(self.pos[1], WINDOW_HEIGHT - self.radius))
 
+    def check_collision(self, new_x, new_y):
+        """
+        Return True if the pixel at (new_x,new_y) in the floorplan
+        is NOT black – i.e. it's free space.
+        """
+        w, h = FLOORPLAN_SURFACE.get_size()
+        # directions: center + 8 compass points
+        checks = [(0, 0)]
+        for angle in [i * math.pi/4 for i in range(8)]:
+            checks.append((
+                self.radius * math.cos(angle),
+                self.radius * math.sin(angle)
+            ))
+
+        for dx, dy in checks:
+            px = int(new_x + dx)
+            py = int(new_y + dy)
+            # clamp to image bounds
+            px = max(0, min(px, w-1))
+            py = max(0, min(py, h-1))
+            r, g, b, *_ = FLOORPLAN_SURFACE.get_at((px, py))
+            if (r, g, b) == (0, 0, 0):
+                return False
+        return True
 
 # —————————————————————————————————
 
@@ -40,6 +77,9 @@ class CalmPedestrian(Pedestrian):
         self.change_timer = random.randint(30, 90)
         self.hear_count = 0
 
+    # def move(self, *args, **kwargs):
+    #     pass
+
     def move(self, all_agents, obstacles=None):
         # 1) occasionally pick a new random direction
         self.change_timer -= 1
@@ -48,24 +88,22 @@ class CalmPedestrian(Pedestrian):
             self.dir = [math.cos(angle), math.sin(angle)]
             self.change_timer = random.randint(30, 90)
 
-        # 2) step in that direction
-        dx = self.dir[0] * self.speed
-        dy = self.dir[1] * self.speed
-        new_pos = [self.pos[0] + dx, self.pos[1] + dy]
+        # 2) attempt up to 5 small hops along that heading
+        for _ in range(5):
+            dx = self.dir[0] * self.speed
+            dy = self.dir[1] * self.speed
+            nx, ny = self.pos[0] + dx, self.pos[1] + dy
+            if self.check_collision(nx, ny):
+                self.pos[0], self.pos[1] = nx, ny
+                self._clamp()
+                return
+            # nudge direction slightly & retry
+            self.dir[0] += (random.random() - 0.5) * 0.5
+            self.dir[1] += (random.random() - 0.5) * 0.5
 
-        # grid check
-        grid = get_grid()
-        cell_x = int(new_pos[0] // GRID_SIZE)
-        cell_y = int(new_pos[1] // GRID_SIZE)
-        # only step if inside bounds ans free
-        if (0 <= cell_x < len(grid) and
-            0 <= cell_y < len(grid[0]) and
-            grid[cell_x][cell_y] == 0):
-            self.pos = new_pos
-            self._clamp()
-        else:
-            self.dir[0] *= -1
-            self.dir[1] *= -1
+        # 3) if still blocked, pick a totally fresh heading
+        angle = random.random() * math.tau
+        self.dir = [math.cos(angle), math.sin(angle)]
 
 
 # —————————————————————————————————
@@ -78,43 +116,37 @@ class ConfusedPedestrian(Pedestrian):
         self.counter     = 0
         self.hear_count  = 0
 
+    # def move(self, *args, **kwargs):
+    #     pass
+
     def move(self, all_agents, obstacles=None):
         self.counter += 1
 
-        # find nearest panic (if any)
-        panics = [a for a in all_agents if isinstance(a, PanicPedestrian)]
+        # steer partly toward nearest panic
+        panics = [p for p in all_agents if isinstance(p, PanicPedestrian)]
         if panics:
             nearest = min(panics,
                           key=lambda p: math.hypot(p.pos[0]-self.pos[0],
                                                    p.pos[1]-self.pos[1]))
-            dx = nearest.pos[0] - self.pos[0]
-            dy = nearest.pos[1] - self.pos[1]
-            d  = math.hypot(dx, dy)
-            if d > 1e-6:
-                ux, uy = dx/d, dy/d
-            else:
-                ux = uy = 0.0
+            dx, dy = nearest.pos[0]-self.pos[0], nearest.pos[1]-self.pos[1]
+            d = math.hypot(dx, dy) or 1.0
+            ux, uy = dx/d, dy/d
         else:
             ux = uy = 0.0
 
-        # during pause, jitter + strong pull
+        # 1) during pause, jitter + pull
         if self.counter < self.pause_timer:
             wander = 4
-            # *increase* the panic‐pull to 50% of top speed
-            cand_x = self.pos[0] + random.uniform(-wander, wander) + ux * (self.speed * 0.5)
-            cand_y = self.pos[1] + random.uniform(-wander, wander) + uy * (self.speed * 0.5)
-
-            grid = get_grid()
-            cx, cy = int(cand_x // GRID_SIZE), int(cand_y // GRID_SIZE)
-            if 0 <= cx < len(grid) and 0 <= cy < len(grid[0]) and grid[cx][cy] == 0:
-                self.pos[0] = cand_x
-                self.pos[1] = cand_y
+            cand_x = self.pos[0] + random.uniform(-wander, wander) + ux*(self.speed*0.5)
+            cand_y = self.pos[1] + random.uniform(-wander, wander) + uy*(self.speed*0.5)
+            if self.check_collision(cand_x, cand_y):
+                self.pos[0], self.pos[1] = cand_x, cand_y
                 self._clamp()
-
-        # after pause window, reset cycle
+        # 2) after pause window, reset the cycle
         elif self.counter > self.pause_timer + 30:
-            self.counter     = 0
+            self.counter = 0
             self.pause_timer = random.randint(60, 120)
+
 
 # —————————————————————————————————
 class PanicPedestrian(Pedestrian):
@@ -130,35 +162,51 @@ class PanicPedestrian(Pedestrian):
         self.recalc_timer = 0
         self.recalc_interval = 12
 
+    # def move(self, *args, **kwargs):
+    #     pass
+
     def move(self, all_agents=None, obstacles=None):
-        # 1) recompute a fresh A* path to the exit every frame
-        grid  = get_grid()
+       # recompute A* path every frame
+        grid = get_grid()
         start = (int(self.pos[0] // GRID_SIZE), int(self.pos[1] // GRID_SIZE))
         goal  = (int(self.target[0] // GRID_SIZE), int(self.target[1] // GRID_SIZE))
-        path = astar(grid, start, goal)
+        self.path = astar(grid, start, goal) or []
 
-        if not path: 
-            return   # no path found, stay put
+        if not self.path:
+            return
 
-        # 2) take the very first step on that path
-        nx, ny   = path[0]
-        next_px  = ((nx + 0.5) * GRID_SIZE, (ny + 0.5) * GRID_SIZE)
-        dx, dy   = next_px[0] - self.pos[0], next_px[1] - self.pos[1]
-        dist     = math.hypot(dx, dy)
+        # pick the first reachable path step
+        cand_step = None
+        while self.path:
+            nx, ny = self.path[0]
+            next_x = (nx + 0.5) * GRID_SIZE
+            next_y = (ny + 0.5) * GRID_SIZE
+            if self.check_collision(next_x, next_y):
+                cand_step = (next_x, next_y)
+                break
+            else:
+                self.path.pop(0)
 
+        if cand_step is None:
+            return
+
+        # actually move toward that step
+        cx, cy = cand_step
+        dx, dy = cx - self.pos[0], cy - self.pos[1]
+        dist = math.hypot(dx, dy)
         if dist < 1e-6:
-            return  # already there
+            return
 
         step = min(self.speed, dist)
-        cand_x = self.pos[0] + step * dx / dist
-        cand_y = self.pos[1] + step * dy / dist
+        nx = self.pos[0] + (dx/dist) * step
+        ny = self.pos[1] + (dy/dist) * step
 
-        grid = get_grid()
-        cx, cy = int(cand_x // GRID_SIZE), int(cand_y // GRID_SIZE)
-        if 0 <= cx < len(grid) and 0 <= cy < len(grid[0]) and grid[cx][cy] == 0:
-            self.pos[0] = cand_x
-            self.pos[1] = cand_y
+        if self.check_collision(nx, ny):
+            self.pos[0], self.pos[1] = nx, ny
             self._clamp()
+        else:
+            # force a re-route next tick
+            self.path = []
 
     def draw(self, surface):
         super().draw(surface)

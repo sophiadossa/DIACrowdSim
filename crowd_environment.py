@@ -13,6 +13,7 @@ SOURCE_COLOR   = (34, 177,  76)
 EXIT_COLOR     = (237,  28,  36)
 WALL_COLOR     = (0,    0,    0)
 
+
 # how many cells across/down
 cols = WINDOW_WIDTH  // GRID_SIZE  # e.g. 20
 rows = WINDOW_HEIGHT // GRID_SIZE  # e.g. 15
@@ -28,7 +29,7 @@ DARK_THRESH = 50
 # 3) Derive grid‐level lists from the tiny image:
 #    A) occupancy grid
 grid = [[0]*rows for _ in range(cols)]
-LUM_THRESH = 500
+LUM_THRESH = 200
 wall_mask = (r + g+ b) < LUM_THRESH
 for y, x in zip(*np.where(wall_mask)):
     grid[x][y] = 1
@@ -52,14 +53,35 @@ if not sources:
         (3.6, 7.7, 5,   1),
     ]
 
-#    D) manual obstacles (if you still need rectangular walls)
-obstacles = [
-    (2, 7, 18, 0.5),
-    (2, 7, 8, 0.5),
-    (14, 7, 6, 0.5),
-    (19.6, 0, 0.4, 17),
-    (9, 3, 0.4, 9)
-]
+# Manual obstacles defined in GRID‐CELLS (x, y, width, height)
+# obstacles = [
+#     # ── CENTRAL HORIZONTAL BAR ────────────────────────────────
+#     # spans from cell x=2.0 to x=20.0, at y≈7.0, thickness ≈0.5
+#     (4.8, 6.5, 15.0, 0.5),
+
+#     # ── CENTRAL VERTICAL BAR ──────────────────────────────────
+#     # spans from cell y=2.5 to y=11.5, at x≈9.95, thickness ≈0.5
+#     (10.5, 2.25, 0.5, 10.9),
+
+#     # RIGHT STAGE LINE
+#     (19.5, 0, 0.5, 25.0),
+
+#     # ── TOP‐LEFT EXIT BOTTLENECK ────────────────────────────
+#     # vertical corridors: must span the full 2 cells of red exit + a bit extra
+#     (1.2, 0.8, 0.2, 2.4),   # left corridor
+#     (2.7, 0.8, 0.2, 2.4),   # right corridor
+#     # vertical blocker posts: exactly 1 cell tall
+#     (1.2, 0.0, 0.2, 1.0),   # left blocker
+#     (2.7, 0.0, 0.2, 1.0),   # right blocker
+
+#     # ── BOTTOM‐LEFT EXIT BOTTLENECK ─────────────────────────
+#     # vertical corridors: same length, positioned just above the bottom exit
+#     (1.2, 12.6, 0.2, 2.4),  # left corridor
+#     (2.7, 12.6, 0.2, 2.4),  # right corridor
+#     # blocker posts beside the bottom exit
+#     (1.2, 14.0, 0.2, 1.0),  # left blocker
+#     (2.7, 14.0, 0.2, 1.0),  # right blocker
+# ]
 
 # 4) Build Cromosim Domain off the tiny image
 dom = Domain(
@@ -92,6 +114,8 @@ _pg_floorplan = pygame.transform.scale(
     (WINDOW_WIDTH, WINDOW_HEIGHT)
 )
 
+FLOORPLAN_SURFACE = _pg_floorplan
+
 def draw_rects(rects, color):
     """Draws list of grid (x,y,w,h) rects into Pygame coords."""
     for x, y, w, h in rects:
@@ -102,46 +126,57 @@ def draw_rects(rects, color):
         )
 
 def get_grid():
-    """Return occupancy grid as 2D list: 1=wall, 0=free."""
-    grid = [[0 for _ in range(rows)] for _ in range(cols)]
-    for x in range(cols):
-        for y in range(rows):
-            if (r[y, x] < DARK_THRESH
-            and  g[y, x] < DARK_THRESH
-            and  b[y, x] < DARK_THRESH):
-                grid[x][y] = 1
+    raw = np.array(img_small)            # shape (rows,cols,3)
+    r, g, b = raw[:,:,0], raw[:,:,1], raw[:,:,2]
+
+    # any “near black” pixel is a wall
+    wall = (r <  50) & (g <  50) & (b <  50)
+
+    grid = [[1 if wall[y,x] else 0
+             for y in range(rows)]
+            for x in range(cols)]
     return grid
+
 
 def get_grid_obstacles():
     """Return manual obstacle rectangles for your collision code."""
-    return obstacles
+    # return obstacles
+    return []
 
-def debug_draw_grid(surface):
+def debug_draw_grid(surface, padding_frac=0.1):
     """Outline each occupied cell for debugging."""
+    pad = GRID_SIZE * padding_frac
+    cell = GRID_SIZE - 2 * pad
     grid = get_grid()
-    for x in range(cols):
-        for y in range(rows):
+    for x in range(len(grid)):
+        for y in range(len(grid[0])):
             if grid[x][y] == 1:
-                pygame.draw.rect(
-                    surface,
-                    (200,200,200),
-                    (x*GRID_SIZE, y*GRID_SIZE,
-                     GRID_SIZE,    GRID_SIZE),
-                    1
+                rect = pygame.Rect(
+                    x*GRID_SIZE + pad,
+                    y*GRID_SIZE + pad,
+                    cell, cell
                 )
+                pygame.draw.rect(surface, (200,200,200), rect, 1)
 
 def run_environment(custom_draw_fn=None):
     """
-    1) blit the full-detail background
-    2) overlay manual walls, exits, sources
-    3) call your agents’ draw/update
+    Each frame:
+      1) cap the frame‐rate & get dt
+      2) draw background
+      3) call simulation_draw(window, dt)
     """
     while True:
-        window.fill(BG_COLOR)
-        window.blit(_pg_floorplan, (0,0))
+        # 1) cap at 60fps, and get milliseconds since last tick
+        dt_ms = clock.tick(60)
+        dt = dt_ms / 1000.0    # convert to seconds
 
+        # 2) draw static background
+        window.fill(BG_COLOR)
+        window.blit(_pg_floorplan, (0, 0))
+
+        # 3) hand off to your simulation, with dt
         if custom_draw_fn:
-            custom_draw_fn(window)
+            custom_draw_fn(window, dt)
 
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
@@ -149,4 +184,6 @@ def run_environment(custom_draw_fn=None):
                 sys.exit()
 
         pygame.display.flip()
-        clock.tick(60)
+
+
+

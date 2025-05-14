@@ -1,6 +1,5 @@
 import sys
 import random
-import math
 import pygame
 from crowd_environment import (
     run_environment,
@@ -12,9 +11,18 @@ from crowd_environment import (
     debug_draw_grid,
     sources,
     targets,
+    dom,
+    clock,
 )
 from manager import PedestrianManager, PedestrianType
 from pedestrian import CalmPedestrian, PanicPedestrian
+from cromosim.micro import (
+    compute_contacts,
+    compute_forces,
+    move_people,
+    people_update_destination,
+)
+
 
 manager = PedestrianManager(sources, targets)
 
@@ -31,41 +39,49 @@ crowd_zones = [
 grid = get_grid()
 cols, rows = len(grid), len(grid[0])
 
-for _ in range(20):
+for _ in range(10):
+    # choose one of your source‐zones at random
     zx, zy, zw, zh = random.choice(crowd_zones)
+    # ensure we’re working in integer cell‐coords
+    zx, zy, zw, zh = int(zx), int(zy), int(zw), int(zh)
+
     while True:
-        # pick a random integer cell index inside the zone
+        # pick a random cell inside that rectangle
         cell_x = random.randint(zx, zx + zw - 1)
         cell_y = random.randint(zy, zy + zh - 1)
 
-        # clamp to grid bounds
+        # clamp to domain bounds just in case
         cell_x = max(0, min(cell_x, cols - 1))
         cell_y = max(0, min(cell_y, rows - 1))
 
-        # only accept if this cell is walkable
+        # only accept a walkable (grid=0) cell
         if grid[cell_x][cell_y] == 0:
+            # convert to pixel position at cell center
             spawn_px = [
                 (cell_x + 0.5) * GRID_SIZE,
                 (cell_y + 0.5) * GRID_SIZE
             ]
-            manager.spawn_agent(PedestrianType.CALM,
-                                custom_spawn=spawn_px)
+            manager.spawn_agent(
+                PedestrianType.CALM,
+                custom_spawn=spawn_px
+            )
             break
-
 # Button config
 button_rect = pygame.Rect(650, 20, 130, 40)
 button_font = pygame.font.SysFont("arial", 18)
 
-def simulation_draw(surface):
+def simulation_draw(surface, dt):
     # panic button
     pygame.draw.rect(surface, (255,100,100), button_rect)
     label = button_font.render("SPAWN PANIC", True, (255,255,255))
     surface.blit(label, (button_rect.x+10, button_rect.y+10))
 
     debug_draw_grid(surface)
-    manager.update(get_grid_obstacles())
+    # debug_draw_obstacles(surface)
+    # manager.update(get_grid_obstacles())
+    # manager.draw(surface)
+    manager.update(dt)
     manager.draw(surface)
-
 
     for event in pygame.event.get():
         if event.type == pygame.MOUSEBUTTONDOWN and button_rect.collidepoint(event.pos):
