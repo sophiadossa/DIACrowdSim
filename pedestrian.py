@@ -1,15 +1,9 @@
 import pygame
 import math
-import collections
 import random
-from pathfinding import astar, get_neighbours
-from crowd_environment import get_grid, get_grid_obstacles, GRID_SIZE, WINDOW_HEIGHT, WINDOW_WIDTH, dom, FLOORPLAN_SURFACE
-from cromosim.micro import (
-    compute_contacts,
-    compute_forces,
-    move_people,
-    people_update_destination,
-)
+from pathfinding import astar
+import crowd_environment as env
+from crowd_environment import get_grid, GRID_SIZE, WINDOW_HEIGHT, WINDOW_WIDTH, dom
 
 class Pedestrian:
     def __init__(self, spawn, target, colour=(0,0,255), speed=2):
@@ -44,7 +38,7 @@ class Pedestrian:
         Return True if the pixel at (new_x,new_y) in the floorplan
         is NOT black – i.e. it's free space.
         """
-        w, h = FLOORPLAN_SURFACE.get_size()
+        w, h = env.FLOORPLAN_SURFACE.get_size()
         # directions: center + 8 compass points
         checks = [(0, 0)]
         for angle in [i * math.pi/4 for i in range(8)]:
@@ -59,28 +53,34 @@ class Pedestrian:
             # clamp to image bounds
             px = max(0, min(px, w-1))
             py = max(0, min(py, h-1))
-            r, g, b, *_ = FLOORPLAN_SURFACE.get_at((px, py))
+            r, g, b, *_ = env.FLOORPLAN_SURFACE.get_at((px, py))
             if (r, g, b) == (0, 0, 0):
                 return False
         return True
 
+    def distance_to_exit(self):
+        # euclidian distance from current pos to exit targ
+        dx = self.target[0] - self.pos[0]
+        dy = self.target[1] - self.pos[1]
+        return math.hypot(dx,dy)
 # —————————————————————————————————
 
 class CalmPedestrian(Pedestrian):
-    def __init__(self, spawn, target):
+    def __init__(self, spawn, target, home_zone):
         super().__init__(spawn, target,
                          colour=(30,144,255),
                          speed=random.uniform(0.5, 1.2))
-        # pick an initial random direction
+   
+        self.home_zone = home_zone
         angle = random.random() * math.tau
         self.dir = [math.cos(angle), math.sin(angle)]
         self.change_timer = random.randint(30, 90)
         self.hear_count = 0
 
-    # def move(self, *args, **kwargs):
-    #     pass
-
     def move(self, all_agents, obstacles=None):
+
+        min_x, max_x, min_y, max_y = self.home_zone
+
         # 1) occasionally pick a new random direction
         self.change_timer -= 1
         if self.change_timer <= 0:
@@ -88,20 +88,29 @@ class CalmPedestrian(Pedestrian):
             self.dir = [math.cos(angle), math.sin(angle)]
             self.change_timer = random.randint(30, 90)
 
-        # 2) attempt up to 5 small hops along that heading
+        # 2) attempt up to 5 small hops
         for _ in range(5):
-            dx = self.dir[0] * self.speed
-            dy = self.dir[1] * self.speed
-            nx, ny = self.pos[0] + dx, self.pos[1] + dy
+            nx = self.pos[0] + self.dir[0] * self.speed
+            ny = self.pos[1] + self.dir[1] * self.speed
+
+            # Reject if outside home_zone
+            if not (min_x <= nx <= max_x and min_y <= ny <= max_y):
+                # pick a new random heading and retry
+                angle = random.random() * math.tau
+                self.dir = [math.cos(angle), math.sin(angle)]
+                continue
+
+            # Reject walls
             if self.check_collision(nx, ny):
-                self.pos[0], self.pos[1] = nx, ny
-                self._clamp()
+                # Accept this move
+                self.pos = [nx, ny]
                 return
-            # nudge direction slightly & retry
+
+            # Else nudge direction slightly and retry
             self.dir[0] += (random.random() - 0.5) * 0.5
             self.dir[1] += (random.random() - 0.5) * 0.5
 
-        # 3) if still blocked, pick a totally fresh heading
+        # If all 5 hops failed, pick a fresh random heading
         angle = random.random() * math.tau
         self.dir = [math.cos(angle), math.sin(angle)]
 
@@ -152,8 +161,8 @@ class ConfusedPedestrian(Pedestrian):
 class PanicPedestrian(Pedestrian):
     def __init__(self, spawn, target,
                  speed: float = 3.0,
-                 panic_radius: float = 15.0,
-                 vision_radius: float = 60.0):
+                 panic_radius: float = 25.0,
+                 vision_radius: float = 40.0):
         super().__init__(spawn, target, colour=(255,0,0), speed=speed)
         self.panic_radius   = panic_radius
         self.vision_radius  = vision_radius
@@ -188,6 +197,11 @@ class PanicPedestrian(Pedestrian):
                 self.path.pop(0)
 
         if cand_step is None:
+            angle = random.random() * math.tau
+            nx = self.pos[0] + math.cos(angle) * self.speed
+            ny = self.pos[1] + math.sin(angle) * self.speed
+            if self.check_collision(nx, ny):
+                self.pos = [nx, ny]
             return
 
         # actually move toward that step
