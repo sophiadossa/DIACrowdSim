@@ -148,7 +148,7 @@ def run_environment(custom_draw_fn=None, show_sources=False):
     """
     assert img_full is not None, "You must call load_floorplan(...) first!"
     while True:
-        dt_ms = clock.tick(60)
+        dt_ms = clock.tick(90)
         dt    = dt_ms / 1000.0
 
         window.fill(BG_COLOR)

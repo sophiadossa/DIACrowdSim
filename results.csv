@@ -1,10 +1,1 @@
-floorplan,trial,time_to_full_panic,time_to_evacuate,max_congestion,pass_fail
-floorplan1.png,0,nan,nan,8,FAIL
-floorplan1.png,1,nan,nan,5,FAIL
-floorplan1.png,2,nan,nan,6,FAIL
-floorplan1.png,3,nan,nan,5,FAIL
-floorplan1.png,4,nan,nan,5,FAIL
-floorplan1.png,5,nan,nan,5,FAIL
-floorplan1.png,6,nan,nan,5,FAIL
-floorplan1.png,7,nan,nan,5,FAIL
-floorplan1.png,8,nan,nan,5,FAIL
+floorplan,trial,time_to_full_panic,time_to_evac,max_congestion,pct_panicked,pass_fail

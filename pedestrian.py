@@ -124,6 +124,7 @@ class ConfusedPedestrian(Pedestrian):
         self.pause_timer = random.randint(50, 100)
         self.counter     = 0
         self.hear_count  = 0
+        self.pull_strength = 5.0
 
     # def move(self, *args, **kwargs):
     #     pass
@@ -145,9 +146,11 @@ class ConfusedPedestrian(Pedestrian):
 
         # 1) during pause, jitter + pull
         if self.counter < self.pause_timer:
-            wander = 4
-            cand_x = self.pos[0] + random.uniform(-wander, wander) + ux*(self.speed*0.5)
-            cand_y = self.pos[1] + random.uniform(-wander, wander) + uy*(self.speed*0.5)
+            wander = 3
+            # apply class-level pull_strength instead of fixed 0.5
+            pull = self.pull_strength
+            cand_x = self.pos[0] + random.uniform(-wander, wander) + ux * (self.speed * pull)
+            cand_y = self.pos[1] + random.uniform(-wander, wander) + uy * (self.speed * pull)
             if self.check_collision(cand_x, cand_y):
                 self.pos[0], self.pos[1] = cand_x, cand_y
                 self._clamp()
@@ -160,7 +163,7 @@ class ConfusedPedestrian(Pedestrian):
 # —————————————————————————————————
 class PanicPedestrian(Pedestrian):
     def __init__(self, spawn, target,
-                 speed: float = 3.0,
+                 speed: float = 4.0,
                  panic_radius: float = 25.0,
                  vision_radius: float = 40.0):
         super().__init__(spawn, target, colour=(255,0,0), speed=speed)
