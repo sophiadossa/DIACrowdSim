@@ -25,7 +25,7 @@ manager = PedestrianManager(env.crowd_zones, env.targets)
 grid = get_grid()
 cols, rows = len(grid), len(grid[0])
 
-for _ in range(100):
+for _ in range(50):
     # choose one of your source‐zones at random
     zx, zy, zw, zh = random.choice(env.crowd_zones)
     # ensure we’re working in integer cell‐coords

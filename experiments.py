@@ -39,6 +39,14 @@ def run_trial(floorplan, n_calm=10, n_panic=2, max_steps=500):
 
         now = time.time() - start
 
+        if now >= 120.0:
+            # penalize all panicked RL agents
+            for a in mgr.agents:
+                if isinstance(a, RLAgent) and a.is_panicked():
+                    # one‐time −1 for timeout
+                    a.q_table[a.prev_state][a.last_action] -= 1.0
+            raise StopIteration
+
         # A) seed panics
         for i, t in enumerate(seed_times):
             if not seeds_spawned[i] and now >= t:

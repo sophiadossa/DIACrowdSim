@@ -68,6 +68,7 @@ class RLAgent(Pedestrian):
         self.FPS             = 60            # simulation frame rate
         self.STUCK_FRAMES    = int(self.STUCK_LIMIT * self.FPS)
         self.total_agents    = None          # set on first panicked step
+        
 
     def get_state_vector(self):
         dx = self.target[0] - self.pos[0]
@@ -170,60 +171,68 @@ class RLAgent(Pedestrian):
                 ConfusedPedestrian.move(self, all_agents, obstacles)
             return
 
-        # on first panic tick, record how many agents we started with
+        # on first panic tick, remember how many we started with
         if self.total_agents is None:
             self.total_agents = len(all_agents)
 
         # ——— RL step ———
-
-        # 1) observe state & distance to exit
+        # 1) observe state & exit-distance
         s0 = self.get_state(all_agents)
+        self.prev_state = s0
         d0 = self.distance_to_exit()
-        if self.prev_dist is None:
-            self.prev_dist = d0
 
-        # 2) pick & apply action
+        # 2) record old pos for stuck check
+        old_x, old_y = self.pos.copy()
+
+        # 3) pick & apply action
         a = self.select_action(s0)
-        self.prev_state  = s0
         self.last_action = a
         self.apply_action(a)
 
-        # 3) observe new distance
+        # 4) measure movement
+        dx = self.pos[0] - old_x
+        dy = self.pos[1] - old_y
+        dist_moved = math.hypot(dx, dy)
+
+        # 5) stuck penalty if practically no movement
+        stuck_penalty = -1.0 if dist_moved < (self.radius * 0.5) else 0.0
+
+        # 6) observe next state & exit-distance
+        s1 = self.get_state(all_agents)
         d1 = self.distance_to_exit()
 
-        # 4) stuck detection
-        if d1 >= self.prev_dist - 1e-3:
-            self.stuck_time += 1
-        else:
-            self.stuck_time = 0
-        self.prev_dist = d1
+        # 7) compute reward components
+        spatial_reward    = (d0 - d1)                           # + for getting closer
+        infection_bonus   = BETA * self.infections_this_step    # + for infections
+        collision_penalty = -0.5 if dist_moved < self.radius else 0.0
 
-        stuck_penalty = 0.0
-        if self.stuck_time >= self.STUCK_FRAMES:
-            stuck_penalty = -1.0
-            # teach “don’t repeat that action here”
-            self.q_table[s0][a] -= 1.0
-            self.stuck_time = 0
+        # 8) time penalty to encourage speed
+        time_penalty = -0.01
 
-        # 5) neglect penalty: fraction of calm/confused still around
+        # 9) neglect penalty: penalize fraction of calm/conf left
         remaining = sum(1 for p in all_agents if p.is_calm() or p.is_confused())
-        neglect_penalty = - (remaining / self.total_agents)
+        neglect_penalty = -(remaining / self.total_agents)
 
-        # 6) other reward parts
-        spatial_reward   = d0 - d1
-        infection_bonus  = BETA * self.infections_this_step
+        # 10) total combined reward
+        R_total = (
+            spatial_reward
+            + infection_bonus
+            + collision_penalty
+            + stuck_penalty
+            + time_penalty
+            + neglect_penalty
+        )
 
-        # 7) full Q-learning update
-        s1        = self.get_state(all_agents)
+        # 11) Q-learning update
         best_next = np.max(self.q_table[s1])
-        R_total   = spatial_reward + infection_bonus + stuck_penalty + neglect_penalty
-
         self.q_table[s0][a] += self.alpha * (
             R_total + self.gamma * best_next - self.q_table[s0][a]
         )
 
-        # 8) decay ε
+        # 12) decay ε
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+
+
 
 
     def _move_calm(self):
