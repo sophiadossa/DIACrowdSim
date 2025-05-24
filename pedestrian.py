@@ -20,6 +20,10 @@ class Pedestrian:
         self.desired_velocity = 1.2
         self.domain = dom
 
+    def is_calm(self): return False
+    def is_confused(self): return False
+    def is_panicked(self): return False
+
     def draw(self, surface):
         pygame.draw.circle(surface, self.colour,
                            (int(self.pos[0]), int(self.pos[1])),
@@ -76,6 +80,8 @@ class CalmPedestrian(Pedestrian):
         self.dir = [math.cos(angle), math.sin(angle)]
         self.change_timer = random.randint(30, 90)
         self.hear_count = 0
+    
+    def is_calm(self): return True
 
     def move(self, all_agents, obstacles=None):
 
@@ -124,10 +130,12 @@ class ConfusedPedestrian(Pedestrian):
         self.pause_timer = random.randint(50, 100)
         self.counter     = 0
         self.hear_count  = 0
-        self.pull_strength = 5.0
+        self.pull_strength = 2.0
 
     # def move(self, *args, **kwargs):
     #     pass
+
+    def is_confused(self): return True
 
     def move(self, all_agents, obstacles=None):
         self.counter += 1
@@ -163,7 +171,7 @@ class ConfusedPedestrian(Pedestrian):
 # —————————————————————————————————
 class PanicPedestrian(Pedestrian):
     def __init__(self, spawn, target,
-                 speed: float = 4.0,
+                 speed: float = 2.5,
                  panic_radius: float = 25.0,
                  vision_radius: float = 40.0):
         super().__init__(spawn, target, colour=(255,0,0), speed=speed)
@@ -176,6 +184,7 @@ class PanicPedestrian(Pedestrian):
 
     # def move(self, *args, **kwargs):
     #     pass
+    def is_panicked(self): return True
 
     def move(self, all_agents=None, obstacles=None):
        # recompute A* path every frame
@@ -228,10 +237,10 @@ class PanicPedestrian(Pedestrian):
     def draw(self, surface):
         super().draw(surface)
         # draw your panic/vision radii if desired
-        pygame.draw.circle(surface, (255,0,0),
-                           (int(self.pos[0]), int(self.pos[1])),
-                           int(self.panic_radius), 1)
-        pygame.draw.circle(surface, (0,255,0),
-                           (int(self.pos[0]), int(self.pos[1])),
-                           int(self.vision_radius), 1)
+        # pygame.draw.circle(surface, (255,0,0),
+        #                    (int(self.pos[0]), int(self.pos[1])),
+        #                    int(self.panic_radius), 1)
+        # pygame.draw.circle(surface, (0,255,0),
+        #                    (int(self.pos[0]), int(self.pos[1])),
+        #                    int(self.vision_radius), 1)
         

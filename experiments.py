@@ -12,7 +12,7 @@ from pedestrian_type import PedestrianType
 SHARED_RL = RLAgent()
 
 
-env.load_floorplan("floorplan1.png")  # dummy load to init pygame
+env.load_floorplan("empty.png")  # dummy load to init pygame
 
 def run_trial(floorplan, n_calm=10, n_panic=2, max_steps=500):
     # reset map & manager
@@ -24,7 +24,7 @@ def run_trial(floorplan, n_calm=10, n_panic=2, max_steps=500):
 
     # spawn calm agents
     for _ in range(n_calm):
-        mgr.spawn_agent(PedestrianType.RL, initial_state="calm")
+        mgr.spawn_agent(PedestrianType.CALM)
 
     # panic‐seed timers
     seed_times    = [1.0, 1.5]
@@ -33,6 +33,7 @@ def run_trial(floorplan, n_calm=10, n_panic=2, max_steps=500):
     t_full = None
     step   = 0
     max_congestion = 0
+    is_leader = False
 
     def draw_fn(window, dt):
         nonlocal prev_agents, step, t_full, max_congestion
@@ -51,11 +52,18 @@ def run_trial(floorplan, n_calm=10, n_panic=2, max_steps=500):
         for i, t in enumerate(seed_times):
             if not seeds_spawned[i] and now >= t:
                 y_coord = GRID_SIZE if i == 0 else WINDOW_HEIGHT - GRID_SIZE
-                mgr.spawn_agent(
+                agent = mgr.spawn_agent(
                     PedestrianType.RL,
                     custom_spawn=[WINDOW_WIDTH*3/4, y_coord],
                     initial_state="panic"
                 )
+                agent.colour = (0, 255, 0)
+                agent.is_leader = True
+                # mgr.spawn_agent(
+                #     PedestrianType.RL,
+                #     custom_spawn=[WINDOW_WIDTH*3/4, y_coord],
+                #     initial_state="panic"
+                # )
                 seeds_spawned[i] = True
 
         # B) one step of the world
@@ -77,7 +85,7 @@ def run_trial(floorplan, n_calm=10, n_panic=2, max_steps=500):
         for a in mgr.agents:
             if isinstance(a, RLAgent) and a.is_panicked():
                 st = a.get_state(mgr.agents)
-                act = rl.select_action(st)
+                act = a.select_action(st)
                 a._prev_state  = st
                 a._prev_dist   = a.distance_to_exit()
                 a._last_action = act
@@ -145,4 +153,4 @@ def experiment(fps, trials=50):
 
 
 if __name__ == "__main__":
-    experiment(["floorplan1.png"], trials=100)
+    experiment(["empty.png"], trials=50)
