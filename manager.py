@@ -72,6 +72,8 @@ class PedestrianManager:
                     self.spawn_agent(new_t, custom_spawn=old.pos, initial_state=state)
             self.pending_replacements.clear()
 
+
+
         # 1) Remove exited
         survivors = []
         for a in self.agents:
@@ -81,6 +83,12 @@ class PedestrianManager:
                 if x0 <= a.pos[0] <= x0+tw*GRID_SIZE and y0 <= a.pos[1] <= y0+th*GRID_SIZE:
                     exited = True
                     break
+            # if this is one of our two leaders, defer its exit until the crowd is empty
+            if exited and isinstance(a, RLAgent) and getattr(a, 'is_leader', False):
+                # only allow exit when _no_ other agents remain
+                if any(not isinstance(b, RLAgent) or not getattr(b, 'is_leader', False)
+                    for b in self.agents):
+                    exited = False
             if not exited:
                 survivors.append(a)
         self.agents = survivors
@@ -127,20 +135,41 @@ class PedestrianManager:
             a = self.agents[i]
             for j in range(i+1, n):
                 b = self.agents[j]
-                dx, dy = a.pos[0]-b.pos[0], a.pos[1]-b.pos[1]
+                dx, dy = a.pos[0] - b.pos[0], a.pos[1] - b.pos[1]
                 dist = math.hypot(dx, dy)
                 rsum = a.get_radius() + b.get_radius()
                 if 0 < dist < rsum:
-                    # RL collision penalty
-                    if getattr(a, "is_panicked", lambda: False)() and getattr(b, "is_panicked", lambda: False)():
-                        if isinstance(a, RLAgent): a.on_collision()
-                        if isinstance(b, RLAgent): b.on_collision()
+                    # if one is RLAgent and the other isn’t, only move the non-RL one
+                    if isinstance(a, RLAgent) and not isinstance(b, RLAgent):
+                        mover, stay = b, a
+                    elif isinstance(b, RLAgent) and not isinstance(a, RLAgent):
+                        mover, stay = a, b
+                    else:
+                        mover, stay = None, None
+
+                    if mover is not None:
+                        # compute half-overlap push
+                        overlap = (rsum - dist)
+                        ux, uy = dx/dist, dy/dist
+                        # push `mover` away from `stay`
+                        new_x = mover.pos[0] - ux * overlap
+                        new_y = mover.pos[1] - uy * overlap
+                        if mover.check_collision(new_x, new_y):
+                            mover.pos = [new_x, new_y]
+                        # skip the rest of this pair so RLAgent isn't moved
+                        continue
+
+                    # otherwise fall back to symmetric push
                     overlap = (rsum - dist)
                     ux, uy = dx/dist, dy/dist
-                    a_nx, a_ny = a.pos[0]+ux*(overlap*0.5), a.pos[1]+uy*(overlap*0.5)
-                    b_nx, b_ny = b.pos[0]-ux*(overlap*0.5), b.pos[1]-uy*(overlap*0.5)
-                    if a.check_collision(a_nx, a_ny): a.pos[:] = [a_nx,a_ny]
-                    if b.check_collision(b_nx, b_ny): b.pos[:] = [b_nx,b_ny]
+                    a_nx = a.pos[0] + ux*(overlap*0.5)
+                    a_ny = a.pos[1] + uy*(overlap*0.5)
+                    b_nx = b.pos[0] - ux*(overlap*0.5)
+                    b_ny = b.pos[1] - uy*(overlap*0.5)
+                    if a.check_collision(a_nx, a_ny):
+                        a.pos = [a_nx, a_ny]
+                    if b.check_collision(b_nx, b_ny):
+                        b.pos = [b_nx, b_ny]
 
         # bump‐contagion
         panics = [

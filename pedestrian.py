@@ -187,52 +187,111 @@ class PanicPedestrian(Pedestrian):
     def is_panicked(self): return True
 
     def move(self, all_agents=None, obstacles=None):
-       # recompute A* path every frame
-        grid = get_grid()
-        start = (int(self.pos[0] // GRID_SIZE), int(self.pos[1] // GRID_SIZE))
-        goal  = (int(self.target[0] // GRID_SIZE), int(self.target[1] // GRID_SIZE))
-        self.path = astar(grid, start, goal) or []
+        from rl_agent import RLAgent
+        # 1) Herding: if any RLAgent leaders are alive, follow the nearest one
+        leaders = [p for p in all_agents if isinstance(p, RLAgent)]
+        if leaders:
+            # find the closest leader
+            leader = min(leaders,
+                         key=lambda p: math.hypot(p.pos[0]-self.pos[0],
+                                                  p.pos[1]-self.pos[1]))
+            dx, dy = leader.pos[0] - self.pos[0], leader.pos[1] - self.pos[1]
+            dist = math.hypot(dx, dy) or 1.0
+            ux, uy = dx/dist, dy/dist
 
-        if not self.path:
+            # step straight toward that leader
+            nx = self.pos[0] + ux * self.speed
+            ny = self.pos[1] + uy * self.speed
+            if self.check_collision(nx, ny):
+                self.pos = [nx, ny]
+            # done herding this tick
             return
 
-        # pick the first reachable path step
-        cand_step = None
-        while self.path:
-            nx, ny = self.path[0]
-            next_x = (nx + 0.5) * GRID_SIZE
-            next_y = (ny + 0.5) * GRID_SIZE
-            if self.check_collision(next_x, next_y):
-                cand_step = (next_x, next_y)
-                break
-            else:
-                self.path.pop(0)
+        # 2) Fallback: if no leaders present (e.g. they died or you forgot to spawn them),
+        #    revert to your old A*-to-exit behavior:
 
-        if cand_step is None:
-            angle = random.random() * math.tau
-            nx = self.pos[0] + math.cos(angle) * self.speed
-            ny = self.pos[1] + math.sin(angle) * self.speed
+        grid = get_grid()
+        sx = int(self.pos[0]//GRID_SIZE)
+        sy = int(self.pos[1]//GRID_SIZE)
+        tx = int(self.target[0]//GRID_SIZE)
+        ty = int(self.target[1]//GRID_SIZE)
+
+        path = astar(grid, (sx,sy), (tx,ty)) or []
+        if not path:
+            return
+
+        # pick the first reachable step
+        cand = None
+        for cell in path:
+            cx, cy = (cell[0]+.5)*GRID_SIZE, (cell[1]+.5)*GRID_SIZE
+            if self.check_collision(cx, cy):
+                cand = (cx, cy)
+                break
+        if cand is None:
+            # stuck: random jitter
+            angle = random.random() * 2*math.pi
+            nx = self.pos[0] + math.cos(angle)*self.speed
+            ny = self.pos[1] + math.sin(angle)*self.speed
             if self.check_collision(nx, ny):
                 self.pos = [nx, ny]
             return
 
-        # actually move toward that step
-        cx, cy = cand_step
+        # move toward that cell
+        cx, cy = cand
         dx, dy = cx - self.pos[0], cy - self.pos[1]
-        dist = math.hypot(dx, dy)
-        if dist < 1e-6:
-            return
-
+        dist = math.hypot(dx, dy) or 1.0
         step = min(self.speed, dist)
-        nx = self.pos[0] + (dx/dist) * step
-        ny = self.pos[1] + (dy/dist) * step
-
+        nx = self.pos[0] + dx/dist*step
+        ny = self.pos[1] + dy/dist*step
         if self.check_collision(nx, ny):
-            self.pos[0], self.pos[1] = nx, ny
-            self._clamp()
-        else:
-            # force a re-route next tick
-            self.path = []
+            self.pos = [nx, ny]
+
+    #    # recompute A* path every frame
+    #     grid = get_grid()
+    #     start = (int(self.pos[0] // GRID_SIZE), int(self.pos[1] // GRID_SIZE))
+    #     goal  = (int(self.target[0] // GRID_SIZE), int(self.target[1] // GRID_SIZE))
+    #     self.path = astar(grid, start, goal) or []
+
+    #     if not self.path:
+    #         return
+
+    #     # pick the first reachable path step
+    #     cand_step = None
+    #     while self.path:
+    #         nx, ny = self.path[0]
+    #         next_x = (nx + 0.5) * GRID_SIZE
+    #         next_y = (ny + 0.5) * GRID_SIZE
+    #         if self.check_collision(next_x, next_y):
+    #             cand_step = (next_x, next_y)
+    #             break
+    #         else:
+    #             self.path.pop(0)
+
+    #     if cand_step is None:
+    #         angle = random.random() * math.tau
+    #         nx = self.pos[0] + math.cos(angle) * self.speed
+    #         ny = self.pos[1] + math.sin(angle) * self.speed
+    #         if self.check_collision(nx, ny):
+    #             self.pos = [nx, ny]
+    #         return
+
+    #     # actually move toward that step
+    #     cx, cy = cand_step
+    #     dx, dy = cx - self.pos[0], cy - self.pos[1]
+    #     dist = math.hypot(dx, dy)
+    #     if dist < 1e-6:
+    #         return
+
+    #     step = min(self.speed, dist)
+    #     nx = self.pos[0] + (dx/dist) * step
+    #     ny = self.pos[1] + (dy/dist) * step
+
+    #     if self.check_collision(nx, ny):
+    #         self.pos[0], self.pos[1] = nx, ny
+    #         self._clamp()
+    #     else:
+    #         # force a re-route next tick
+    #         self.path = []
 
     def draw(self, surface):
         super().draw(surface)

@@ -2,7 +2,7 @@
 import time, csv, math
 from tqdm import tqdm
 import pandas as pd
-
+import pygame
 import crowd_environment as env
 from rl_agent import RLAgent, BETA
 from crowd_environment import WINDOW_WIDTH, WINDOW_HEIGHT, GRID_SIZE
@@ -26,7 +26,12 @@ def run_trial(floorplan, n_calm=10, n_panic=2, max_steps=500):
     for _ in range(n_calm):
         mgr.spawn_agent(PedestrianType.CALM)
 
+    # track leaders
+    leaders = []
+
     # panic‐seed timers
+    initial_total = n_calm + n_panic
+    casualties = 0
     seed_times    = [1.0, 1.5]
     seeds_spawned = [False, False]
     prev_agents = []
@@ -37,8 +42,42 @@ def run_trial(floorplan, n_calm=10, n_panic=2, max_steps=500):
 
     def draw_fn(window, dt):
         nonlocal prev_agents, step, t_full, max_congestion
+        nonlocal casualties, leaders, initial_total
 
         now = time.time() - start
+
+        for L in leaders:
+            if L not in mgr.agents:
+                if hasattr(L, 'prev_state') and hasattr(L, 'last_action'):
+                    L.q_table[L.prev_state][L.last_action] -= 10.0
+                raise StopIteration
+
+        # ─── FIRE OVERLAY ─────────────────────────────────────────
+        FIRE_DELAY    = 5.0
+        FIRE_DURATION = 180.0
+        if now < FIRE_DELAY:
+            fire_frac = 0.0
+        else:
+            fire_frac = min((now - FIRE_DELAY) / FIRE_DURATION, 1.0)
+        fire_x = WINDOW_WIDTH * (1 - fire_frac)
+        surf = pygame.Surface((WINDOW_WIDTH - fire_x, WINDOW_HEIGHT), pygame.SRCALPHA)
+        surf.fill((255,165,0,100))
+        window.blit(surf, (fire_x, 0))
+
+        # ─── ANYBODY IN THE FIRE DIES ────────────────────────────
+        for a in list(mgr.agents):
+            if a.pos[0] + a.get_radius() >= fire_x:
+                # massive Q‐penalty for any leader or follower
+                penalty = -20.0
+                if isinstance(a, RLAgent):
+                    # punish the last action strongly
+                    st = getattr(a, '_prev_state', None)
+                    act= getattr(a, 'last_action', None)
+                    if st is not None and act is not None:
+                        a.q_table[st][act] += penalty
+                # remove from sim, count as casualty
+                mgr.agents.remove(a)
+                casualties += 1
 
         if now >= 120.0:
             # penalize all panicked RL agents
@@ -49,6 +88,7 @@ def run_trial(floorplan, n_calm=10, n_panic=2, max_steps=500):
             raise StopIteration
 
         # A) seed panics
+        
         for i, t in enumerate(seed_times):
             if not seeds_spawned[i] and now >= t:
                 y_coord = GRID_SIZE if i == 0 else WINDOW_HEIGHT - GRID_SIZE
@@ -59,6 +99,7 @@ def run_trial(floorplan, n_calm=10, n_panic=2, max_steps=500):
                 )
                 agent.colour = (0, 255, 0)
                 agent.is_leader = True
+                leaders.append(agent)
                 # mgr.spawn_agent(
                 #     PedestrianType.RL,
                 #     custom_spawn=[WINDOW_WIDTH*3/4, y_coord],
@@ -69,6 +110,14 @@ def run_trial(floorplan, n_calm=10, n_panic=2, max_steps=500):
         # B) one step of the world
         mgr.update(dt)
         mgr.draw(window)
+
+        for L in leaders:
+            if L in mgr.agents:
+                st = L.get_state(mgr.agents)
+                act = rl.select_action(st)
+                L.prev_state  = st
+                L.last_action = act
+                L.apply_action(act)
 
         # C) congestion tracking
         if mgr.agents:
@@ -115,31 +164,41 @@ def run_trial(floorplan, n_calm=10, n_panic=2, max_steps=500):
 
     # metrics
     t_full_panic = t_full or float("nan")
-    t_evac       = now    if not mgr.agents else float("nan")
-    pct_panicked = 100.0 * sum(a.is_panicked() for a in mgr.agents) / max(1, len(mgr.agents))
-    passed       = (not mgr.agents)
-    return t_full_panic, t_evac, max_congestion, pct_panicked, passed
+    # anyone left in mgr.agents is still stuck when we stopped
+    evacuated = initial_total - casualties - len(mgr.agents)
+    evac_pct  = 100 * evacuated / initial_total
+    dead_pct  = 100 * casualties  / initial_total
+    # time‐to‐evac only makes sense if everyone got out
+    t_evac    = now if evacuated == initial_total else float("nan")
+    pct_panicked = 100.0 * sum(getattr(a,'is_panicked',lambda:False)() for a in mgr.agents) \
+                   / max(1, len(mgr.agents))
+    return (t_full_panic, t_evac, max_congestion, pct_panicked,
+            evac_pct, dead_pct)
 
 
 def experiment(fps, trials=50):
     total = len(fps) * trials
-    with open("results.csv","w",newline="") as f:
+    with open("results.csv", "w", newline="") as f:
         w = csv.writer(f)
         w.writerow([
-            "floorplan","trial",
-            "time_to_full_panic","time_to_evac",
-            "max_congestion","pct_panicked","pass_fail"
+            "floorplan", "trial",
+            "time_to_full_panic", "time_to_evac",
+            "max_congestion", "pct_panicked",
+            "pct_evacuated", "pct_dead"
         ])
+
         bar_fmt = "{l_bar}{bar}| Iter {n}/{total} | Elapsed: {elapsed} | Left: {remaining}"
         with tqdm(total=total, desc="Trials", bar_format=bar_fmt) as pbar:
             for fp in fps:
                 for i in range(trials):
-                    row = run_trial(fp, n_calm=100, n_panic=2, max_steps=500)
+                    t_full, t_evac, cong, pct, evac_pct, dead_pct = run_trial(
+                        fp, n_calm=100, n_panic=2, max_steps=500
+                    )
                     w.writerow([
                         fp, i,
-                        f"{row[0]:.2f}", f"{row[1]:.2f}",
-                        row[2], f"{row[3]:.1f}",
-                        "PASS" if row[4] else "FAIL"
+                        f"{t_full:.2f}", f"{t_evac:.2f}",
+                        cong, f"{pct:.1f}",
+                        f"{evac_pct:.1f}", f"{dead_pct:.1f}"
                     ])
                     pbar.update(1)
 
@@ -152,5 +211,6 @@ def experiment(fps, trials=50):
     df.to_csv("q_table.csv")
 
 
+
 if __name__ == "__main__":
-    experiment(["empty.png"], trials=50)
+    experiment(["empty.png"], trials=100)
